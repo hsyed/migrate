@@ -102,8 +102,7 @@ SELECT pg_advisory_unlock(%d);
 
 	for idx, v := range schema.Changes[currentVersion:len(schema.Changes)] {
 		migIdx := currentVersion + idx + 1
-		tx, err := conn.BeginTx(ctx, &sql.TxOptions{})
-		if err != nil {
+		if tx, err := conn.BeginTx(ctx, &sql.TxOptions{}); err != nil {
 			return err
 		} else if _, err = tx.ExecContext(ctx, v.Up); err != nil {
 			_ = tx.Rollback()
@@ -114,6 +113,7 @@ SELECT pg_advisory_unlock(%d);
 		} else if _, err = tx.ExecContext(ctx,
 			`INSERT INTO schema_migration_history(version, id, sql) VALUES($1, $2, $3);`,
 			migIdx, v.Id, v.Up); err != nil {
+			_ = tx.Rollback()
 			return fmt.Errorf("could not insert migration history entry for change %s: %w", v.Id, err)
 		} else if err := tx.Commit(); err != nil {
 			return err
