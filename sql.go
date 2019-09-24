@@ -54,23 +54,13 @@ func (s *sqlBackend) applyPostgres(ctx context.Context, conn *sql.Conn, destroy 
 		destroySql = fmt.Sprintf(`DROP SCHEMA IF EXISTS "%s" CASCADE;`, schema.Name)
 	}
 
-	// Dirty flag is provided since some postgres migrations are not transaction safe --e.g., adding an ordinal to an
-	// enum.
 	var acquireSql = fmt.Sprintf(`
 SELECT pg_advisory_lock(%d);
 %s
 CREATE SCHEMA IF NOT EXISTS "%s";
 SET search_path TO "%s", public;
-CREATE TABLE IF NOT EXISTS schema_migrations (version INT NOT NULL, dirty boolean);
-INSERT INTO schema_migrations(version, dirty)
-	SELECT 0, false
-	WHERE 0=(SELECT count(*) FROM schema_migrations);
-CREATE TABLE IF NOT EXISTS schema_migration_history(
-    version INT NOT NULL,
-    id TEXT NOT NULL PRIMARY KEY,
-    sql TEXT NOT NULL,
-	applied_at TIMESTAMP WITHOUT TIME ZONE DEFAULT now()::timestamp
-);
+CREATE TABLE IF NOT EXISTS schema_migrations (version INT NOT NULL);
+INSERT INTO schema_migrations(version) SELECT 0 WHERE 0=(SELECT count(*) FROM schema_migrations);
 `, pgLockKey, destroySql, schema.Name, schema.Name)
 
 	var releaseSql = fmt.Sprintf(`
@@ -90,35 +80,22 @@ SELECT pg_advisory_unlock(%d);
 	}()
 
 	var currentVersion int
-	var dirty bool
-
-	if err := conn.QueryRowContext(ctx, `SELECT version, dirty FROM schema_migrations;`).Scan(&currentVersion, &dirty); err != nil {
+	if err := conn.QueryRowContext(ctx, `SELECT version FROM schema_migrations;`).Scan(&currentVersion); err != nil {
 		return fmt.Errorf("could not get migration state: %w", err)
 	}
 
-	if dirty {
-		return fmt.Errorf("schema is dirty version %d", currentVersion)
-	}
-
-	for idx, v := range schema.Changes[currentVersion:len(schema.Changes)] {
-		migIdx := currentVersion + idx + 1
+	for _, v := range filterSortChanges(currentVersion, schema.Changes) {
 		if tx, err := conn.BeginTx(ctx, &sql.TxOptions{}); err != nil {
 			return err
-		} else if _, err = tx.ExecContext(ctx, v.Up); err != nil {
+		} else if _, err = tx.ExecContext(ctx, v.ddl); err != nil {
 			_ = tx.Rollback()
-			return fmt.Errorf("could not apply change: %s", v.Id)
-		} else if _, err = tx.ExecContext(ctx, `UPDATE schema_migrations SET version = $1;`, migIdx); err != nil {
+			return fmt.Errorf("could not apply change: %d", v.ordinal)
+		} else if _, err = tx.ExecContext(ctx, `UPDATE schema_migrations SET version = $1;`, v.ordinal); err != nil {
 			_ = tx.Rollback()
-			return fmt.Errorf("could not update migration version for change %s: %w", v.Id, err)
-		} else if _, err = tx.ExecContext(ctx,
-			`INSERT INTO schema_migration_history(version, id, sql) VALUES($1, $2, $3);`,
-			migIdx, v.Id, v.Up); err != nil {
-			_ = tx.Rollback()
-			return fmt.Errorf("could not insert migration history entry for change %s: %w", v.Id, err)
+			return fmt.Errorf("could not update migration version for change %d: %w", v.ordinal, err)
 		} else if err := tx.Commit(); err != nil {
 			return err
 		}
 	}
-
 	return nil
 }

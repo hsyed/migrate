@@ -11,21 +11,20 @@ import (
 
 var schema = Schema{
 	Name: "test_schema",
-	Changes: []Change{{
-		Id: "create_customer_tables",
-		Up: `CREATE TABLE customers(
-			 	id SERIAL PRIMARY KEY NOT NULL
-			 );`,
-	}, {
-		Id: "address_tables",
-		Up: `CREATE TABLE addresses(
-			 	id SERIAL PRIMARY KEY NOT NULL,
-			 	customer_id INT REFERENCES customers(id) ON DELETE CASCADE
-			 );`,
-	}, {
-		Id: "something_else",
-		Up: `CREATE TABLE testing();`,
-	}},
+	Changes: Changes{
+		1: `
+CREATE TABLE customers(
+	id SERIAL PRIMARY KEY NOT NULL
+);`,
+		2: `
+CREATE TABLE addresses(
+	id SERIAL PRIMARY KEY NOT NULL,
+	customer_id INT REFERENCES customers(id) ON DELETE CASCADE
+);`,
+		3: `
+CREATE TABLE testing();
+`,
+	},
 }
 
 func TestSimpleMigration(t *testing.T) {

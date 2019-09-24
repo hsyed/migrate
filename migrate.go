@@ -3,36 +3,44 @@ package migrate
 import (
 	"context"
 	"errors"
-	"fmt"
+	"sort"
 )
 
-type Change struct {
-	Id string
-	Up string
-}
+type Changes map[int]string
 
 type Schema struct {
-	Name string
-	Changes []Change
+	Name    string
+	Changes Changes
 }
 
 func validateSchema(schema *Schema) error {
 	if schema.Name == "" {
 		return errors.New("schema name not set")
 	}
-
-	tally := map[string]struct{}{}
-	for i, v := range schema.Changes {
-		if v.Id == "" {
-			return fmt.Errorf("change %d had no id", i+1)
-		}
-		if _, ok := tally[v.Id]; ok {
-			return fmt.Errorf("change id \"%s\" already in use", v.Id)
-		} else {
-			tally[v.Id] = struct{}{}
+	for k, v := range schema.Changes {
+		if k <= 0 {
+			return errors.New("ordinal must start from 1")
+		} else if v == "" {
+			return errors.New("no ddl in change")
 		}
 	}
 	return nil
+}
+
+type delta struct {
+	ordinal int
+	ddl     string
+}
+
+func filterSortChanges(filter int, changes Changes) []delta {
+	ret := make([]delta, 0, len(changes))
+	for k, v := range changes {
+		if k > filter {
+			ret = append(ret, delta{k, v})
+		}
+	}
+	sort.Slice(ret, func(i, j int) bool { return ret[i].ordinal < ret[j].ordinal })
+	return ret
 }
 
 type Backend interface {
